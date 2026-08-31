@@ -1,0 +1,293 @@
+---
+title: "FEISTY spatial yield analysis for the North West Shelf"
+author: "Ludovic Lebarbey"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Purpose
+
+This document describes the spatial FEISTY analysis of yield change in four North West Shelf (NWS) study regions: Bay of Biscay, Celtic Sea, English Channel, and North Sea.
+
+The analysis compares mean yield in 2090--2100 with mean yield in 2020--2029. Results are shown for total yield, small pelagics, demersals, and large pelagics, both as absolute change (g m^-2^ year^-1^) and percentage change.
+
+The selected fishing strategy in every region and period must satisfy the management constraint that the spawning-stock biomass (SSB) of each group remains at or above 30% of its unfished value (SSB0).
+
+## Reproducibility and project structure
+
+All paths below are relative to the repository root. The two large FEISTY input files are not included in the GitHub repository because of their size. They are needed only to rerun the full spatial simulation and must be copied into `data/` with the exact file names shown below.
+
+The small spatial-cell classification, selected-strategy table, final validation table, summary table, and eight final maps are included. Consequently, this document can be rendered from a fresh clone without the two large inputs. See `INSTRUCTIONS_AVANT_PUBLICATION.md` for a short pre-publication checklist.
+
+```{r}
+#| label: setup
+
+library(tidyverse)
+library(data.table)
+
+base_dir <- normalizePath(".", winslash = "/", mustWork = TRUE)
+data_dir <- file.path(base_dir, "data")
+outputs_dir <- file.path(base_dir, "outputs")
+tables_dir <- file.path(outputs_dir, "tables")
+figures_dir <- file.path(outputs_dir, "figures")
+
+environment_file <- file.path(data_dir, "nws_for_feisty_proj_year.RDS")
+ffmsy_file <- file.path(data_dir, "all_FFMSY.RDS")
+cells_file <- file.path(outputs_dir, "rds", "NWS_full_grid_four_regions_cells.RDS")
+strategy_file <- file.path(tables_dir, "NWS_decadal_optimisation_best_approach.csv")
+
+render_files <- c(cells_file, strategy_file)
+missing_render_files <- render_files[!file.exists(render_files)]
+
+if (length(missing_render_files) > 0) {
+  stop(
+    "Files required to render this document are missing:\n- ",
+    paste(missing_render_files, collapse = "\n- ")
+  )
+}
+
+tibble(
+  file = c(
+    "nws_for_feisty_proj_year.RDS",
+    "all_FFMSY.RDS",
+    "NWS_full_grid_four_regions_cells.RDS",
+    "NWS_decadal_optimisation_best_approach.csv"
+  ),
+  purpose = c(
+    "Full simulation only; local large input",
+    "Full simulation only; local large input",
+    "Rendering and full simulation; included",
+    "Rendering and full simulation; included"
+  ),
+  available = file.exists(c(
+    environment_file,
+    ffmsy_file,
+    cells_file,
+    strategy_file
+  ))
+)
+```
+
+## Study regions and spatial grid
+
+The four study regions use the same approximate longitude--latitude boxes as the earlier FEISTY workflow. The final calculation uses every available environmental cell within these boxes.
+
+```{r}
+#| label: study-regions
+
+study_regions <- c(
+  "Bay of Biscay",
+  "Celtic Sea",
+  "English Channel",
+  "North Sea"
+)
+
+full_cells <- readRDS(cells_file) |>
+  as_tibble() |>
+  filter(sea %in% study_regions)
+
+full_cells |>
+  count(sea, name = "number_of_cells")
+```
+
+## Fishing strategies and the 30% SSB0 constraint
+
+For each region and period, the maximum-yield strategy that passed the initial regional 30% SSB0 criterion was selected. The constraint was then recalculated after the spatial FEISTY simulations using the spatial mean SSB and SSB0 values.
+
+Bay of Biscay required a small reduction in fishing intensity after the initial spatial validation. The final values were a constant F of 0.33 for 2020--2029 and an FFMSY temperature coefficient of 0.54 for 2090--2100.
+
+```{r}
+#| label: selected-strategies
+
+period_definition <- tribble(
+  ~decade, ~climate_period, ~start_year, ~end_year,
+  "2020-2029", "Reference 2020-2029", 2020L, 2029L,
+  "2090-2100", "Future 2090-2100", 2090L, 2100L
+)
+
+best_strategy <- read.csv(strategy_file, stringsAsFactors = FALSE) |>
+  as_tibble() |>
+  filter(region %in% study_regions, decade %in% period_definition$decade) |>
+  mutate(
+    optimal_F_or_Fcoef = case_when(
+      region == "Bay of Biscay" & decade == "2020-2029" ~ 0.33,
+      region == "Bay of Biscay" & decade == "2090-2100" ~ 0.54,
+      TRUE ~ optimal_F_or_Fcoef
+    )
+  ) |>
+  left_join(period_definition, by = "decade") |>
+  arrange(match(region, study_regions), start_year)
+
+best_strategy |>
+  select(region, decade, best_approach, optimal_F_or_Fcoef, minimum_SSB_ratio, limiting_group)
+```
+
+## Full spatial FEISTY calculation
+
+The complete live FEISTY workflow is saved in `NWS_FINAL_maps_FULL_22317_cells.R`. It runs three simulations for each cell: the reference-period fishing strategy, the future-period fishing strategy, and an unfished baseline. The third simulation provides SSB0 for the full-grid constraint check.
+
+The workflow uses checkpoints of 200 cells so that an interrupted calculation can be resumed. It should be run from RStudio before rendering this document.
+
+```{r}
+#| label: run-full-grid
+#| eval: false
+
+# The script defaults to a small test run. After that test succeeds,
+# set full_run <- TRUE in the script to run all 22,317 cells.
+source(
+  file.path(base_dir, "NWS_FINAL_maps_FULL_22317_cells.R"),
+  chdir = TRUE
+)
+```
+
+## Final full-grid 30% SSB0 validation
+
+The final maps are only accepted if every row below has `valid_30pct_full_grid = TRUE`.
+
+```{r}
+#| label: ssb-validation
+
+ssb_check_file <- file.path(
+  tables_dir,
+  "NWS_FINAL_FULL_GRID_22317_cells_30pct_SSB_check.csv"
+)
+
+if (file.exists(ssb_check_file)) {
+  ssb_check <- read.csv(ssb_check_file) |>
+    as_tibble()
+
+  ssb_check |>
+    select(
+      sea, climate_period,
+      ratio_smallPel, ratio_demersals, ratio_largePel,
+      minimum_SSB_ratio_full_grid,
+      limiting_group_full_grid,
+      valid_30pct_full_grid
+    )
+} else {
+  cat("The full-grid calculation is still running. Render this document again after it has finished.")
+}
+```
+
+## Spatial yield-change maps
+
+All maps show 2090--2100 minus 2020--2029 under the selected regional fishing strategies. Percentage maps exclude cells where the reference yield is too close to zero for a percentage to be meaningful.
+
+```{r}
+#| label: map-files
+#| results: hide
+
+map_files <- c(
+  "NWS_FINAL_FULL_total_yield_percent.png",
+  "NWS_FINAL_FULL_total_yield_absolute.png",
+  "NWS_FINAL_FULL_smallPel_percent.png",
+  "NWS_FINAL_FULL_smallPel_absolute.png",
+  "NWS_FINAL_FULL_demersals_percent.png",
+  "NWS_FINAL_FULL_demersals_absolute.png",
+  "NWS_FINAL_FULL_largePel_percent.png",
+  "NWS_FINAL_FULL_largePel_absolute.png"
+)
+
+full_grid_complete <- file.exists(ssb_check_file) &&
+  all(read.csv(ssb_check_file)$valid_30pct_full_grid)
+
+available_maps <- if (full_grid_complete) {
+  file.path(figures_dir, map_files) |> keep(file.exists)
+} else {
+  character(0)
+}
+
+if (length(available_maps) == 0) {
+  cat("Maps will be included after the complete 22,317-cell run has passed the SSB0 validation.")
+} else {
+  available_maps
+}
+```
+
+### Total yield
+
+```{r}
+#| label: total-yield-maps
+#| echo: false
+#| out-width: "49%"
+
+for (map_file in available_maps[grepl("total_yield", available_maps)]) {
+  knitr::include_graphics(map_file)
+}
+```
+
+### Small pelagics
+
+```{r}
+#| label: smallpel-maps
+#| echo: false
+#| out-width: "49%"
+
+for (map_file in available_maps[grepl("smallPel", available_maps)]) {
+  knitr::include_graphics(map_file)
+}
+```
+
+### Demersals
+
+```{r}
+#| label: demersal-maps
+#| echo: false
+#| out-width: "49%"
+
+for (map_file in available_maps[grepl("demersals", available_maps)]) {
+  knitr::include_graphics(map_file)
+}
+```
+
+### Large pelagics
+
+```{r}
+#| label: largepel-maps
+#| echo: false
+#| out-width: "49%"
+
+for (map_file in available_maps[grepl("largePel", available_maps)]) {
+  knitr::include_graphics(map_file)
+}
+```
+
+## Regional summary
+
+The table below summarises the cell-level yield changes by region and group. Mean and median values should be interpreted alongside the maps, because changes are spatially heterogeneous.
+
+```{r}
+#| label: regional-summary
+
+summary_file <- file.path(
+  tables_dir,
+  "NWS_FINAL_FULL_GRID_22317_cells_yield_change_summary.csv"
+)
+
+if (file.exists(summary_file)) {
+  read.csv(summary_file) |>
+    as_tibble()
+} else {
+  cat("The full-grid summary will be available after the calculation finishes.")
+}
+```
+
+## Interpretation and limitations
+
+- The maps represent yield change under the regionally selected, maximum-valid fishing strategy. They do not optimise fishing mortality separately in every cell.
+- The 30% threshold is checked for small pelagics, demersals, and large pelagics using full-grid spatial means.
+- The four regions are defined by approximate longitude--latitude boxes retained from the original workflow.
+- The final calculation uses all available cells in those four study regions.
+
+## Software
+
+The analysis was run in R using the `FEISTY`, `tidyverse`, `data.table`, and `maps` packages. Rendering this document also requires Quarto and `knitr`. The full analysis script records the model setup, parallel processing, checkpointing, FFMSY matching, yield calculations, the SSB0 validation, tables, and figures. The FEISTY package and the two large input files must be supplied from the research environment before rerunning the simulation.

@@ -1,0 +1,6 @@
+project:
+  type: default
+  render:
+    - NWS_FEISTY_spatial_yield_analysis.qmd
+
+execute-dir: project

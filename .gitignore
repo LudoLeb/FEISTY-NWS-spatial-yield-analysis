@@ -1,0 +1,38 @@
+# R and RStudio user files
+**/.Rhistory
+**/.RData
+**/.Ruserdata
+**/.Rproj.user/
+.Renviron
+
+# Quarto-generated working folders
+**/.quarto/
+**/*_cache/
+**/*_files/
+
+# Operating-system files
+**/.DS_Store
+
+# Large or non-redistributed research inputs
+NWS/data/nws_for_feisty_proj_year.RDS
+NWS/data/all_FFMSY.RDS
+Global/data/raw/
+Global/data/derived/
+Global/data/*.RDS
+Global/data/*.rds
+Global/data/*.RData
+
+# Resumable checkpoints, logs and progress pages
+**/outputs/checkpoints/
+**/outputs/logs/
+**/outputs/*progress*.html
+
+# Large intermediate binary outputs
+**/outputs/**/*.rds
+**/outputs/**/*.RDS
+
+# Keep the small NWS spatial classification already used by the report
+!NWS/outputs/rds/NWS_full_grid_four_regions_cells.RDS
+
+# Local archives
+*.zip
