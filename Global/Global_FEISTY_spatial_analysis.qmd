@@ -1,0 +1,442 @@
+---
+title: "Global FEISTY spatial simulations"
+subtitle: "Workflow and main results"
+author: "Ludovic Lebarbey"
+date: last-modified
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    colorlinks: true
+    geometry:
+      - top=20mm
+      - bottom=20mm
+      - left=20mm
+      - right=20mm
+    fig-pos: H
+execute:
+  echo: false
+  warning: false
+  message: false
+fontsize: 10pt
+---
+
+## Purpose
+
+This document describes the global FEISTY workflow and presents the main results of the completed simulations. The analysis extends the regional North West Shelf work to the global one-degree ocean grid.
+
+The objectives are to:
+
+- evaluate a climate-only reference without fishing;
+- select and validate a constant fishing mortality that respects the 30% SSB0 constraint;
+- run the selected scenarios on the complete global grid;
+- describe spatial patterns in spawning-stock biomass (SSB) and yield; and
+- compare simulated yield with observed catch across Large Marine Ecosystems (LMEs).
+
+## Analysis scope
+
+The forcing file available for this analysis covers January 2015 to December 2087. It contains 876 monthly records for each of 41,008 ocean cells. The global simulation therefore uses the following periods:
+
+- reference period: 2015--2019;
+- final period: 2083--2087.
+
+Two scenarios are compared:
+
+- `F0`: climate forcing without fishing;
+- `F040`: climate forcing with a constant fishing mortality of $F = 0.40\ \mathrm{yr}^{-1}$.
+
+The same fishing mortality is applied to small pelagics, large pelagics and demersals in every cell and year. This provides a controlled global experiment. It should not be interpreted as an estimate of the actual fishing pressure in individual LMEs.
+
+## Reproducibility and input data
+
+The code, selected summary tables and final figures are included in the repository. The complete raw climate forcing, full cell-level output and resumable checkpoints are excluded because of their size.
+
+The full calculation requires:
+
+```text
+data/raw/global_feisty_projection.RDS
+```
+
+The LME comparison additionally requires:
+
+```text
+data/raw/grid_LME_1deg.RData
+data/raw/catch_Ftype_LME_year.RData
+```
+
+Alternative paths can be supplied through the environment variables `FEISTY_GLOBAL_FORCING`, `FEISTY_LME_GRID` and `FEISTY_LME_CATCH`. The smaller files retained in `outputs/tables/` are sufficient to render this report without rerunning FEISTY.
+
+```{r}
+#| label: setup
+
+tables_dir <- file.path("outputs", "tables")
+figures_dir <- file.path("outputs", "figures")
+
+required_tables <- c(
+  "global_constant_F_scan_summary.csv",
+  "global_pilot_F040_SSB_constraint.csv",
+  "global_production_5deg_F040_SSB_constraint.csv",
+  "global_full_grid_F040_SSB_constraint.csv",
+  "global_full_grid_weighted_annual_summary.csv",
+  "global_LME_observed_vs_simulated_yield_statistics.csv"
+)
+
+required_figures <- c(
+  "global_constant_F_scan_smoke_test.png",
+  "global_full_grid_weighted_timeseries.png",
+  "global_F040_reference_SSB_four_panel.png",
+  "global_F040_reference_yield_four_panel.png",
+  "global_F040_absolute_SSB_change_four_panel.png",
+  "global_F040_absolute_yield_change_four_panel.png",
+  "global_LME_observed_vs_simulated_yield.png"
+)
+
+required_files <- c(
+  file.path(tables_dir, required_tables),
+  file.path(figures_dir, required_figures)
+)
+
+missing_files <- required_files[!file.exists(required_files)]
+if (length(missing_files) > 0L) {
+  stop(
+    "Files required to render this document are missing:\n- ",
+    paste(missing_files, collapse = "\n- ")
+  )
+}
+
+scan_summary <- read.csv(
+  file.path(tables_dir, "global_constant_F_scan_summary.csv"),
+  check.names = FALSE
+)
+pilot_constraint <- read.csv(
+  file.path(tables_dir, "global_pilot_F040_SSB_constraint.csv"),
+  check.names = FALSE
+)
+production_constraint <- read.csv(
+  file.path(tables_dir, "global_production_5deg_F040_SSB_constraint.csv"),
+  check.names = FALSE
+)
+full_constraint <- read.csv(
+  file.path(tables_dir, "global_full_grid_F040_SSB_constraint.csv"),
+  check.names = FALSE
+)
+lme_statistics <- read.csv(
+  file.path(tables_dir, "global_LME_observed_vs_simulated_yield_statistics.csv"),
+  check.names = FALSE
+)
+
+group_labels <- c(
+  smallPel = "Small pelagics",
+  largePel = "Large pelagics",
+  demersals = "Demersals",
+  total = "Total"
+)
+```
+
+## Workflow
+
+The calculation was developed progressively so that the model settings and output structure could be checked before starting the long global production run.
+
+```{r}
+#| label: workflow-table
+
+workflow <- data.frame(
+  Step = 1:8,
+  Script = sprintf("R/%02d_%s", 1:8, c(
+    "global_climate_baseline_smoke_test.R",
+    "global_fixed_F_smoke_test.R",
+    "global_constant_F_scan_smoke_test.R",
+    "global_pilot_run.R",
+    "global_production_5deg.R",
+    "global_full_grid_production.R",
+    "global_full_grid_maps.R",
+    "global_LME_observed_vs_simulated_yield.R"
+  )),
+  Purpose = c(
+    "Check the forcing and the no-fishing simulation on 12 cells",
+    "Add an initial fixed-F sensitivity on the same cells",
+    "Scan F = 0.05 to 0.60 and select a value under the SSB constraint",
+    "Validate F = 0.40 on 134 stratified cells",
+    "Check both scenarios on a representative five-degree grid",
+    "Run F = 0 and F = 0.40 on all 41,008 one-degree cells",
+    "Create the four global spatial result figures",
+    "Compare observed and simulated yield across LMEs"
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(workflow, longtable = TRUE, booktabs = TRUE)
+```
+
+The long calculations use parallel cell simulations and save resumable checkpoints. The full-grid script first validates the forcing dimensions, runs or reloads every chunk, combines the completed outputs, and checks for missing or duplicated result combinations before producing the final summaries.
+
+## Selection of the fishing scenario
+
+Fishing mortality values from 0.05 to 0.60 yr$^{-1}$ were first evaluated on six shelf and six open-ocean cells. A value was eligible only if the final-period SSB of every commercial group remained at or above 30% of the corresponding no-fishing SSB.
+
+```{r}
+#| label: f-scan-table
+
+scan_display <- scan_summary[, c(
+  "f_value",
+  "min_group_ssb_fraction",
+  "limiting_group",
+  "all_groups_pass",
+  "recommended_on_smoke_test"
+)]
+scan_display$min_group_ssb_fraction <- 100 * scan_display$min_group_ssb_fraction
+scan_display$limiting_group <- unname(group_labels[scan_display$limiting_group])
+scan_display$all_groups_pass <- ifelse(scan_display$all_groups_pass, "Yes", "No")
+scan_display$recommended_on_smoke_test <- ifelse(
+  scan_display$recommended_on_smoke_test,
+  "Yes",
+  "No"
+)
+names(scan_display) <- c(
+  "F (yr-1)",
+  "Minimum group SSB (% of SSB0)",
+  "Limiting group",
+  "All groups >= 30%",
+  "Selected"
+)
+
+knitr::kable(
+  scan_display,
+  digits = c(2, 1, NA, NA, NA),
+  booktabs = TRUE,
+  caption = "Constant-F scan on the twelve-cell test grid."
+)
+```
+
+```{r}
+#| label: fig-f-scan
+#| echo: false
+#| fig-cap: "Mean final-period yield across the twelve-cell test grid. Green points satisfy the aggregate 30% SSB0 constraint for all three groups; orange points fail for at least one group."
+#| out-width: "85%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_constant_F_scan_smoke_test.png")
+)
+```
+
+The largest tested value that passed the constraint was $F = 0.40\ \mathrm{yr}^{-1}$. Large pelagics were the limiting group: their aggregate SSB remained at 31.7% of SSB0 at $F = 0.40$, but fell to 28.4% at $F = 0.45$.
+
+## Validation before the full-grid run
+
+The selected fishing scenario was tested at two intermediate spatial scales. First, a stratified pilot retained 134 cells across shelf and open-ocean habitats. Second, one shelf and one open-ocean cell were retained where available within each five-degree block.
+
+```{r}
+#| label: validation-table
+
+format_constraint <- function(data, stage) {
+  data.frame(
+    Stage = stage,
+    Group = unname(group_labels[data$group]),
+    `SSB under F = 0.40 (% of SSB0)` = 100 * data$ssb_fraction_of_F0,
+    `Passes 30%` = ifelse(data$passes_30pct, "Yes", "No"),
+    check.names = FALSE
+  )
+}
+
+validation_display <- rbind(
+  format_constraint(pilot_constraint, "134-cell pilot"),
+  format_constraint(production_constraint, "Five-degree grid")
+)
+
+knitr::kable(
+  validation_display,
+  digits = c(NA, NA, 1, NA),
+  booktabs = TRUE,
+  caption = "Intermediate validation of the selected constant-F scenario."
+)
+```
+
+All groups passed at both intermediate scales. Large pelagics remained closest to the threshold, which made the final full-grid SSB check essential.
+
+## Full-grid simulation
+
+The production calculation covers all 41,008 one-degree ocean cells under both scenarios from 2015 to 2087. Monthly FEISTY output was aggregated to annual SSB and yield for small pelagics, large pelagics and demersals. The total is the sum of these three commercial groups.
+
+Latitude-based area weights, $\max(\cos(\mathrm{latitude}), 0.01)$, are used for global means so that high-latitude cells do not receive the same weight as tropical cells on the longitude-latitude grid.
+
+```{r}
+#| label: full-grid-constraint
+
+full_display <- data.frame(
+  Group = unname(group_labels[full_constraint$group]),
+  `SSB under F = 0.40 (% of SSB0)` = 100 * full_constraint$ssb_fraction_of_F0,
+  `Passes 30%` = ifelse(full_constraint$passes_30pct, "Yes", "No"),
+  check.names = FALSE
+)
+
+knitr::kable(
+  full_display,
+  digits = c(NA, 1, NA),
+  booktabs = TRUE,
+  caption = "Final SSB0 check on the complete one-degree grid."
+)
+```
+
+All three commercial groups remain above the 30% threshold on the complete grid. Large pelagic SSB is 36.8% of its no-fishing value, compared with 55.5% for demersals and 89.7% for small pelagics. The three-group total is 57.6% of SSB0.
+
+```{r}
+#| label: fig-global-timeseries
+#| echo: false
+#| fig-cap: "Area-weighted annual SSB and yield for the complete global grid. Solid lines show the no-fishing scenario and dashed lines show F = 0.40 yr-1."
+#| out-width: "92%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_full_grid_weighted_timeseries.png")
+)
+```
+
+## Spatial results
+
+All maps use the $F = 0.40\ \mathrm{yr}^{-1}$ scenario. Each figure contains the total and the three component groups. A common colour scale is used across the four panels of each figure. For visualisation only, the scale is capped at the pooled 98th percentile; the underlying numerical outputs are unchanged.
+
+```{r}
+#| label: fig-reference-ssb
+#| echo: false
+#| fig-cap: "Mean spawning-stock biomass in 2015--2019 under F = 0.40 yr-1. The four panels use a common colour scale."
+#| out-width: "100%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_F040_reference_SSB_four_panel.png")
+)
+```
+
+\newpage
+
+```{r}
+#| label: fig-reference-yield
+#| echo: false
+#| fig-cap: "Mean yield in 2015--2019 under F = 0.40 yr-1. The four panels use a common colour scale."
+#| out-width: "100%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_F040_reference_yield_four_panel.png")
+)
+```
+
+\newpage
+
+```{r}
+#| label: fig-change-ssb
+#| echo: false
+#| fig-cap: "Absolute SSB change: mean 2083--2087 minus mean 2015--2019 under F = 0.40 yr-1. Blue indicates a decrease and red an increase."
+#| out-width: "100%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_F040_absolute_SSB_change_four_panel.png")
+)
+```
+
+\newpage
+
+```{r}
+#| label: fig-change-yield
+#| echo: false
+#| fig-cap: "Absolute yield change: mean 2083--2087 minus mean 2015--2019 under F = 0.40 yr-1. Blue indicates a decrease and red an increase."
+#| out-width: "100%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_F040_absolute_yield_change_four_panel.png")
+)
+```
+
+## Comparison with observed LME catch
+
+The LME comparison uses mean observed catch for 1995--2004 on the x-axis and mean simulated yield for 2015--2019 under $F = 0.40\ \mathrm{yr}^{-1}$ on the y-axis. Simulated cell yield is converted from g wet weight m$^{-2}$ yr$^{-1}$ to tonnes yr$^{-1}$ using cell area, then summed within each LME.
+
+One point represents one LME. Both axes use the same logarithmic limits, and the dashed 1:1 line indicates equal observed and simulated yield. Values below one tonne yr$^{-1}$ are omitted from the display. The observed total includes only the three groups represented by FEISTY.
+
+```{r}
+#| label: lme-statistics
+
+lme_display <- data.frame(
+  Group = unname(group_labels[lme_statistics$group]),
+  `LMEs displayed` = lme_statistics$n_lmes,
+  `Pearson correlation (log10)` = lme_statistics$pearson_log10,
+  `Spearman correlation` = lme_statistics$spearman,
+  check.names = FALSE
+)
+
+knitr::kable(
+  lme_display,
+  digits = c(NA, 0, 2, 2),
+  booktabs = TRUE,
+  caption = "Association between observed and simulated yield among LMEs."
+)
+```
+
+```{r}
+#| label: fig-lme-comparison
+#| echo: false
+#| fig-cap: "Observed catch and simulated FEISTY yield across Large Marine Ecosystems. The dashed line is the 1:1 reference."
+#| out-width: "92%"
+#| fig-align: center
+
+knitr::include_graphics(
+  file.path(figures_dir, "global_LME_observed_vs_simulated_yield.png")
+)
+```
+
+The positive correlations show that the simulation reproduces part of the broad spatial variation among LMEs. However, this is not a strict same-year validation because the observed and simulated periods do not overlap. In addition, the model uses one constant global fishing mortality, while actual fishing pressure differs among ecosystems and through time.
+
+## Main interpretation and limitations
+
+The workflow shows that $F = 0.40\ \mathrm{yr}^{-1}$ satisfies the aggregate 30% SSB0 constraint at the test, pilot, five-degree and complete one-degree scales. Large pelagics are consistently the group closest to the threshold.
+
+The spatial maps show substantial geographical variation in both initial conditions and projected absolute changes. The global means should therefore be interpreted together with the maps rather than alone.
+
+The main limitations are:
+
+- the climate forcing ends in December 2087, preventing a projection to 2100;
+- the same fishing mortality is applied globally;
+- the management constraint is evaluated for global, area-weighted group aggregates rather than for every individual cell or LME;
+- the observed LME catch and simulated yield periods do not overlap; and
+- the figures cap extreme values for display, while the complete values remain in the numerical results.
+
+## Rerunning the workflow
+
+The scripts are numbered in their intended order. From the `Global/` directory, the complete workflow is:
+
+```{.bash code-line-numbers="false"}
+FEISTY_GLOBAL_FORCING="/path/to/global_feisty_projection.RDS" \
+  Rscript R/01_global_climate_baseline_smoke_test.R
+
+Rscript R/02_global_fixed_F_smoke_test.R
+Rscript R/03_global_constant_F_scan_smoke_test.R
+
+FEISTY_GLOBAL_FORCING="/path/to/global_feisty_projection.RDS" \
+  Rscript R/04_global_pilot_run.R
+
+FEISTY_GLOBAL_FORCING="/path/to/global_feisty_projection.RDS" \
+  Rscript R/05_global_production_5deg.R
+
+FEISTY_GLOBAL_FORCING="/path/to/global_feisty_projection.RDS" \
+  Rscript R/06_global_full_grid_production.R
+
+Rscript R/07_global_full_grid_maps.R
+
+FEISTY_LME_GRID="/path/to/grid_LME_1deg.RData" \
+FEISTY_LME_CATCH="/path/to/catch_Ftype_LME_year.RData" \
+  Rscript R/08_global_LME_observed_vs_simulated_yield.R
+```
+
+To render this report without rerunning the simulations:
+
+```{.bash code-line-numbers="false"}
+quarto render Global_FEISTY_spatial_analysis.qmd
+```
+
+## Software
+
+The simulation workflow uses R with the `FEISTY`, `data.table`, `parallel`, `ggplot2`, `cowplot` and `scales` packages. This report is rendered with Quarto and `knitr`.

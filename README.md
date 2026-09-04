@@ -24,6 +24,12 @@ Global FEISTY simulations on the one-degree ocean grid from 2015 to 2087. The
 folder contains the complete sequence of R scripts, from the first smoke test
 to the full 41,008-cell production run, global maps and the LME comparison.
 
+The global Quarto report is:
+
+```text
+Global/Global_FEISTY_spatial_analysis.qmd
+```
+
 All global R code is in:
 
 ```text
@@ -48,6 +54,9 @@ steps. Comments beginning with `#` appear in green in RStudio.
 └── Global/
     ├── README.md
     ├── FEISTY_Global.Rproj
+    ├── Global_FEISTY_spatial_analysis.qmd
+    ├── Global_FEISTY_spatial_analysis.pdf
+    ├── _quarto.yml
     ├── R/
     │   ├── 01_global_climate_baseline_smoke_test.R
     │   ├── 02_global_fixed_F_smoke_test.R

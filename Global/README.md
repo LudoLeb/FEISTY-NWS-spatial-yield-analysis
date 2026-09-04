@@ -5,6 +5,10 @@ analysis. **All R code is in the `R/` folder.** The scripts are numbered in the
 order in which they should normally be used, and the main steps are documented
 with comments that appear in green in RStudio.
 
+The main report is `Global_FEISTY_spatial_analysis.qmd`. It describes the full
+workflow and includes the selection, validation, time-series, spatial and LME
+comparison results. The rendered PDF can be read without running the code.
+
 ## R code workflow
 
 | Script | Purpose |
@@ -125,6 +129,13 @@ Rscript R/07_global_full_grid_maps.R
 FEISTY_LME_GRID="/path/to/grid_LME_1deg.RData" \
 FEISTY_LME_CATCH="/path/to/catch_Ftype_LME_year.RData" \
   Rscript R/08_global_LME_observed_vs_simulated_yield.R
+```
+
+To render the report from the selected tables and figures already included in
+the repository:
+
+```bash
+quarto render Global_FEISTY_spatial_analysis.qmd
 ```
 
 The long production runs use checkpoints under `outputs/checkpoints/`, so an
